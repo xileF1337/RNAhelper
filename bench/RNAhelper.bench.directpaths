@@ -1,0 +1,76 @@
+#!/bin/bash
+# RNAhelper.bench
+# Benchmark old and new implementations of RNAhelper against each other
+
+# SET THESE #
+moduleDir=/homes/brauerei2/felix/lib/perl5
+ifile=/homes/brauerei2/felix/scratch/examples/designed_RS_Wachsmuth13/dRS1/RS1.subopt_e25_T37.bar_minh1
+profileFile=/scratch/felix/tmp/nytprof.out
+
+unset doProfile profile
+
+while getopts "p" opt; do
+	case $opt in
+		p)
+			doProfile=1
+			export NYTPROF="file=$profileFile"
+			;;
+		*)
+			echo "ERROR: Invalid option"
+			exit 1
+			;;
+	esac
+done
+
+# Main
+
+whichCmd=1	# defaults to medium benchmark
+profile=""
+[ -n "$doProfile" ] && profile="perl -d:NYTProf"
+
+
+[ ! -s "$ifile" ] && { echo "ERROR: Input file '$ifile' empty or not found"; exit 1; }
+
+posArgCount=$(($# - $OPTIND + 1))
+[ $posArgCount -gt 1 ] && { echo 'ERROR: Too many arguments'; exit 1; }
+[ $posArgCount  -eq 1 ] && whichCmd=${!OPTIND}
+
+case $whichCmd in
+	1)
+		basins="90 92 94 96 121 122" # 10-15 seconds
+		;;
+	2)
+		basin="90 92 94 96 121 122 124 127 128 129 134 135"
+		;;
+	3)
+		basins="90 92 94 96 121 122 124 127 128 129 134 135 136 141 143 145 148 150 152 155 157 158 160 161 162 163 165 167 168 169 170 171 172 173 174 175 176 177 179 180 181 182 183 184 185 186 187 188 189 191 192 193 194 195 196 197 198 199 201 202 203 204 206 207 208 209 210 212 213 214 216 217 218 219 220 221 222 223 224 225 226 227 228 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255 256 257 258 259 260 261 262 263 264 265 266 267 268 269 270 271 272 273 274 275 276 277 278 279 280 281 282 283 284 285 286 287 288 289 290 291 292 293 294 295 296 297 298 299 300 301 302 303 304 305 306 307 308" # full, 1:54m + 3:30m
+		;;
+	*)
+		basins="90"
+esac
+
+[ ! -z "$profile" ] && echo "Profiling enabled: '$profile'"
+
+tool='structConnectOLD'
+benchFullPath="$(which $tool)"
+benchCmd="time $profile $benchFullPath $ifile $basins >/dev/null"
+echo "Benching command: '$benchCmd'"
+eval $benchCmd
+[ -n "$doProfile" ] && nytprofhtml -f "$profileFile" -o "./nytprof.$tool" -d --no-flame
+
+tool='structConnect'
+benchFullPath="$(which $tool)"
+benchCmd="time $profile $benchFullPath $ifile $basins >/dev/null"
+echo "Benching command: '$benchCmd'"
+eval $benchCmd
+[ -n "$doProfile" ] && nytprofhtml -f "$profileFile" -o "./nytprof.$tool" -d --no-flame &&
+	rm "$profileFile"
+
+
+
+
+
+
+
+
+

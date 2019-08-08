@@ -1,0 +1,79 @@
+#!/bin/bash
+# RNAhelper.bench
+# Benchmark old and new implementations of RNAhelper against each other
+
+# SET THESE #
+moduleFiles="RNAhelper.pm " # RNAhelperOLD.pm "       # Separate by whitespace!
+moduleMain=RNAhelper.pm			# This is the module the cmd is supposed to use
+moduleDir=/homes/brauerei2/felix/lib/perl5
+ifile=/homes/brauerei2/felix/scratch/examples/designed_RS_Wachsmuth13/dRS1/RS1
+profileFile=/scratch/felix/tmp/nytprof.out
+
+unset doProfile profile
+
+while getopts "p" opt; do
+	case $opt in
+		p)
+			doProfile=1
+			export NYTPROF="file=$profileFile"
+			;;
+		*)
+			echo "ERROR: Invalid option"
+			exit 1
+			;;
+	esac
+done
+
+# Main
+
+whichCmd=0	# defaults to quick benchmark
+profile=""
+[ -n "$doProfile" ] && profile="perl -d:NYTProf"
+
+
+[ ! -s "$ifile" ] && { echo "ERROR: Input file '$ifile' empty or not found"; exit 1; }
+
+posArgCount=$(($# - $OPTIND + 1))
+[ $posArgCount -gt 1 ] && { echo 'ERROR: Too many arguments'; exit 1; }
+[ $posArgCount  -eq 1 ] && whichCmd=${!OPTIND}
+
+benchFullPath=$(which waterfall)
+benchCmdQuick="$benchFullPath -n3 -m3"  # approx 2 x 15 sec
+benchCmdMedium="$benchFullPath -n4 -m4"  # approx 2 x 1 min
+benchCmdLong="$benchFullPath -n4 -m4.5" # approx 2 x 10 min
+
+benchCmd=$benchCmdQuick
+[ "$whichCmd" -eq 0 ] && benchCmd=$benchCmdQuick
+[ "$whichCmd" -eq 1 ] && benchCmd=$benchCmdMedium
+[ "$whichCmd" -eq 2 ] && benchCmd=$benchCmdLong
+benchCmd="$profile $benchCmd"	# Add profiler if set
+
+echo "Benching command: '$benchCmd'"
+[ ! -z "$profile" ] && echo "Profiling enabled: '$profile'"
+
+tmpFile=$( mktemp -t 'RNAhelper.pm.XXX.tmp')
+curDir="$(pwd)"
+cd "$moduleDir"
+#cp "$moduleMain" "$tmpFile" 
+for m in $moduleFiles; do
+	echo ""
+	echo "Benching module '$m'..."
+	[ -s "$m" ] && 
+		# cp "$m" "$moduleMain" && 	# Bring new module in place
+		time $benchCmd $(readSeq "$ifile")  ||
+		{ echo "ERROR: bench cmd '$benchCmd' failed for module '$m'"; break; }
+	[ -n "$doProfile" ] && nytprofhtml -f "$profileFile" -o "./nytprof.$m" -d --no-flame
+done
+#mv "$tmpFile" "$moduleMain" 
+[ -f "$profileFile" ] && rm "$profileFile"
+cd "$curDir"
+
+
+
+
+
+
+
+
+
+
