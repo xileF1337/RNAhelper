@@ -1,4 +1,3 @@
-#!/usr/bin/env perl
 # RNAhelper.pm
 # Version 1.3 2017-04-18
 #
@@ -724,6 +723,7 @@ sub test
 {
     my $c_code;
     my $bin_store_dir;
+    my @untaint_args;
 
     BEGIN {
         $c_code = <<'END_OF_C_CODE';
@@ -770,10 +770,13 @@ END_OF_C_CODE
         # Place to store compiled inline code, create if non-existent
         $bin_store_dir = File::Spec->catfile( dirname(__FILE__), '.Inline' );
         mkdir $bin_store_dir unless -d $bin_store_dir;
+
+        # Configure Inline to make taint mode work. Generates ugly warnings.
+        @untaint_args = untaint => 1, safemode => 0 if ${^TAINT};
     }
 
     # Compile code and store in the created directory (NOT in BEGIN block!)
-    use Inline C => $c_code, directory => $bin_store_dir;
+    use Inline C => $c_code, directory => $bin_store_dir, @untaint_args;
 }
 
 # The universal gas constant in kcal/mol as defined in ViennaRNA
@@ -2801,29 +2804,169 @@ Version 0.01
 
 =head1 SYNOPSIS
 
-Quick summary of what the module does.
+This module is a collection of misc functions for repeating tasks in RNA
+structure bioinformatics, e. g. mfe folding, dot--bracket string parsing,
+gradient walks on structures, Boltzmann weight computation etc. pp.
 
-Perhaps a little code snippet.
+Here is an example:
 
-    use RNAhelper;
+    use v5.12;
+    use RNAhelper qw(rna_mfe_struct);
 
-    my $foo = RNAhelper->new();
-    ...
+    say rna_mfe_struct 'GGGAUGCCC';
+
 
 =head1 EXPORT
 
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
+Functions need to be imported explicitly. Exported functions:
 
-=head1 SUBROUTINES/METHODS
+=over
+
+=item printStrNrg
+
+=item printStrNrgLst
+
+=item pt2str
+
+=item pt2str_c
+
+=item str2pt
+
+=item path2str
+
+=back
+
+=over
+
+=item rand_seq
+
+=back
+
+=over
+
+=item gradWalk
+
+=item grad_walk
+
+=item floodCycle
+
+=back
+
+=over
+
+=item bestDirectPath
+
+=item bestDirectSaddle
+
+=item directPaths
+
+=back
+
+=over
+
+=item genNeighbors
+
+=item genNeighbors_pairs
+
+=item rmLonelyPairs
+
+=item rmLonelyUnpaired
+
+=item isLonely
+
+=item isLonelyStruct
+
+=item isCanonical
+
+=item isInsLonely
+
+=item isOutLonely
+
+=back
+
+=over
+
+=item bpValid
+
+=item struct_cmp
+
+=item struct_lt
+
+=item struct_eq
+
+=item bp_dist
+
+=back
+
+=over
+
+=item rna_mfe
+
+=item rna_mfe_struct
+
+=item rna_eval_structure
+
+=item make_fold_compound
+
+=item make_model_details
+
+=back
+
+=over
+
+=item boltz2nrg
+
+=item nrg2boltz
+
+=item ensemble_energy
+
+=item partition_energy
+
+=item partition_energy_structiter
+
+=item partition_energy_nrgiter
+
+=item get_gas_const
+
+=item celsius2kelvin
+
+=item get_basin_partition_funcs
+
+=back
+
+=over
+
+=item base_pair_prob
+
+=back
+
+=over
+
+=item get_opt
+
+=item parUniq
+
+=item parSort
+
+=back
+
+=over
+
+=item test
+
+=back
+
+
+=head1 SUBROUTINES
 
 =head2 function1
 
-=cut
+bla bla bla
 
 =head2 function2
 
-=cut
+blub blub blub
+
 
 =head1 AUTHOR
 
@@ -2831,11 +2974,11 @@ Felix Kuehnl, C<< <felix at bioinf.uni-leipzig.de> >>
 
 =head1 BUGS
 
-Please report any bugs or feature requests to C<bug-rnahelper at rt.cpan.org>, or through
-the web interface at L<https://rt.cpan.org/NoAuth/ReportBug.html?Queue=RNAhelper>.  I will be notified, and then you'll
-automatically be notified of progress on your bug as I make changes.
-
-
+Please report any bugs or feature requests to C<bug-rnahelper at rt.cpan.org>,
+or through the web interface at
+L<https://rt.cpan.org/NoAuth/ReportBug.html?Queue=RNAhelper>.  I will be
+notified, and then you'll automatically be notified of progress on your bug as
+I make changes.
 
 
 =head1 SUPPORT
