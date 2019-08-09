@@ -1,5 +1,5 @@
 # RNAhelper.pm
-# Version 1.3 2017-04-18
+# Version 1.3 2019-08-09
 #
 # Provide utilities like pairtable generation, neighbor generation,
 # gradient walks etc. for RNA secondary structures.
