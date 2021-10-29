@@ -1,0 +1,39 @@
+name: rnahelper
+channels:
+  - file:////scr/bintang/felix/conda/conda-bld
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - perl
+  - perl-exporter
+  - perl-devel-assert
+  - perl-autodie
+  - perl-pathtools
+  - viennarna
+  - perl-math-random-mt-auto
+  - perl-inline
+  - perl-inline-c
+  - perl-module-build
+  - perl-app-cpanminus
+  - perl-list-moreutils
+  - perl-readonly
+  - perl-scalar-list-utils
+  - perl-carp
+  - perl-test-more
+  - perl-math-bigint
+  - perl-math-round
+  - perl-experimental
+  - perl-list-util
+  - perl-ipc-system-simple
+  - perl-file-spec
+  - perl-clone
+  - perl-file-copy-recursive
+  - perl-test-warn
+  - perl-pegex
+  - perl-yaml
+  - perl-tie-ixhash
+  - perl-test-pod
+  - perl-test-deep
+prefix: /scr/bintang/felix/conda/envs/rnahelper
+
