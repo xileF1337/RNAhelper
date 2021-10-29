@@ -34,7 +34,7 @@ my $builder = Module::Build->new(
         'Devel::Assert'          => '1.06',
         'Math::Random::MT::Auto' => '6.22',
         'Inline'                 => '0.83',
-        'Inline::C'              => '0.81',
+        'Inline::C'              => '0.78',
         'Math::BigFloat'         => '1.999806',
     },
     add_to_cleanup     => [ 'RNAhelper-*' ],
