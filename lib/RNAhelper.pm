@@ -53,7 +53,8 @@ use Math::Round;
 # use Clone::Fast qw( clone );      # deep copy perl data structures, faster
 use Clone 'clone';
 # Priority queue, call $ref=new Heap:Priority, ->pop/add, WARNING: modified version, added peek()!
-use Math::Random::MT::Auto qw(rand srand);          # use Mersenne twister
+# Use Mersenne twister for pseudo-random number generation.
+use Math::Random::MT::Auto qw(rand srand irand get_seed);
 
 use File::Spec;                 # catfile()
 use File::Basename;             # dirname
@@ -97,8 +98,8 @@ BEGIN {
         path2str
 
         rand_seq
+        rand_seed
 
-        gradWalk
         grad_walk
         floodCycle
 
@@ -110,17 +111,24 @@ BEGIN {
         genNeighbors_pairs
         rmLonelyPairs
         rmLonelyUnpaired
-        isLonely
-        isLonelyStruct
-        isCanonical
-        isInsLonely
-        isOutLonely
+        isLonely            is_lonely
+        isLonelyStruct      is_lonely_struct
+        isCanonical         is_canonical
+        isInsLonely         is_ins_lonely
+        isOutLonely         is_out_lonely
 
-        bpValid
+        is_valid_seq
+        normalize_seq
+        seq_len
+
+        bpValid         bp_valid
+        is_paired
         struct_cmp
         struct_lt
         struct_eq
         bp_dist
+        bp_iter_factory
+        nrg_of_move
 
         rna_mfe
         rna_mfe_struct
@@ -131,6 +139,7 @@ BEGIN {
         boltz2nrg
         nrg2boltz
         ensemble_energy
+        subopt_energy
         partition_energy
         partition_energy_structiter
         partition_energy_nrgiter
@@ -723,7 +732,6 @@ sub test
 {
     my $c_code;
     my $bin_store_dir;
-    my @untaint_args;
 
     BEGIN {
         $c_code = <<'END_OF_C_CODE';
@@ -772,11 +780,14 @@ END_OF_C_CODE
         mkdir $bin_store_dir unless -d $bin_store_dir;
 
         # Configure Inline to make taint mode work. Generates ugly warnings.
-        @untaint_args = untaint => 1, safemode => 0 if ${^TAINT};
+        if (${^TAINT}) {                # only when taint mode active
+            require Inline;
+            Inline->import(qw(untaint unsafe));
+        }
     }
 
     # Compile code and store in the created directory (NOT in BEGIN block!)
-    use Inline C => $c_code, directory => $bin_store_dir, @untaint_args;
+    use Inline C => $c_code, directory => $bin_store_dir;
 }
 
 # The universal gas constant in kcal/mol as defined in ViennaRNA
@@ -800,22 +811,26 @@ sub printStrNrg
     );
 }
 
-
-# Consider using pt2str_c
-sub pt2str( + )
-{
-    my $ptref = shift;
-    my $form = '';
-    my $i = 0;
-    for my $j (@$ptref)
-    {
-        if( $j<0) { $form .= '.'; }
-        elsif( $i<$j) { $form .= '('; }
-        else { $form .= ')'; }
-        $i++;
-    }
-    return $form;
-} # best performance
+# Converts a pair table to a dot-bracket string.
+# Arguments:
+#   pair_table: list or array ref to pairing table.
+# Returns dot-bracket string of the structure.
+sub pt2str( + ) { struct_string(@_) }
+# # Consider using pt2str_c
+# sub pt2str( + )
+# {
+#     my $ptref = shift;
+#     my $form = '';
+#     my $i = 0;
+#     for my $j (@$ptref)
+#     {
+#         if( $j<0) { $form .= '.'; }
+#         elsif( $i<$j) { $form .= '('; }
+#         else { $form .= ')'; }
+#         $i++;
+#     }
+#     return $form;
+# }
 
 
 # Generate pairtable from dot bracket string
@@ -850,10 +865,41 @@ sub str2pt
     return \@pt;
 }
 
+# Normalize sequence, i.e. convert it to upper case, and delete any
+# white-space characters.
+# Arguments:
+#   sequence: sequence to normalize.
+# Returns the normalized sequence.
+sub normalize_seq ($) {
+    my ($sequence) = @_;
+
+    my $normalized_sequence = uc($sequence) =~ s{\s+}{}gr; # =~ s{T}{U}gr;
+
+    return $sequence;
+}
+
+# Given a sequence string or a pair table ref, return the sequence length.
+sub seq_len ($) {
+    my ($seq_or_ptref) = @_;
+    my $seq_len
+        = reftype $seq_or_ptref ? @$seq_or_ptref : length($seq_or_ptref);
+    return $seq_len;
+}
+
+# Return true iff a valid sequence is given, that is one consisting solely of
+# A, U, T, G, and C, eith in upper or lower case. The empty sequence is not
+# valid.
+sub is_valid_seq ($) {
+    my ($sequence) = @_;
+
+    my $is_valid_seq = $sequence =~ m{ ^ [AUTGC]+ $ }ix;
+    return $is_valid_seq;
+}
 
 # Check base pair validity
 # Pass sequence string, pair table reference
 # Returns 0 / 1
+sub bp_valid ( $+ ) { bpValid(@_) }             # snake case wrapper
 sub bpValid ( $+ )
 {
     #die "bpValid: Pass sequence string and pair table" unless @_==2;
@@ -867,7 +913,8 @@ sub bpValid ( $+ )
         {
             unless( any {"$seq[$i]$seq[$j]" eq $_} @VALID_BP)
             {
-                print STDERR "ERROR: bpValid: Invalid base pair '$seq[$i]$seq[$j]' at position ($i,$j).\n";
+                say STDERR "ERROR: bpValid: Invalid base pair ",
+                           "'$seq[$i]$seq[$j]' at position ($i,$j).";
                 return 0;
             }
         }
@@ -1127,7 +1174,7 @@ sub celsius2kelvin ($) {
 sub nrg2boltz {
     my ($energy, $temperature) = @_;
     # Default temperature is 37 deg C
-    $temperature = celsius2kelvin(defined $temperature ? $temperature : 37);
+    $temperature = celsius2kelvin($temperature // 37);
     state $gas_const = get_gas_const();
 
     my $boltzmann_weight = exp( - $energy / ($gas_const*$temperature) );
@@ -1201,13 +1248,24 @@ sub _check_opts_valid {
 # compound constructor to set model details for the energy computation.
 # Arguments: hash ref containing:
 #   temperature: the RNA folding temperature in deg C [37]
-#   dangles: dangling end model, either 0 (= no dangles), 1, or 2 (full) [2]
+#   dangles: dangling end model, either 0 (= no dangles), 1 , 2
+#   (full/overdangle), or 3 (+ helix stacking) [2]
 #   noLP: prohibit lonely base pairs (1 - only canonical structs, 0 - all) [0]
+#         DOES NOT WORK AS EXPECTED for partition function calculations!
+#         E.g. subopts will still contain some structures with lonely pairs,
+#         and partition function will also not be exact.
+#   pf_smooth: smooth energy parameters for partition function calculations [1]
+#              Important to have differentiable energies when varying
+#              temperature. Disable to get exact partition functions when
+#              comparing with individual structures' Boltzmann weight (e.g.
+#              for coverage analyses, probabilities of structures etc.)
+#   compute_bpp: Compute base pair probabilities when doing partition function
+#                folding. [1] Disable improve performance.
 sub make_model_details {
     my ($opt_ref) = @_;
 
     # Verify option validity
-    my @valid_opts = qw(dangles temperature noLP pf_smooth);
+    my @valid_opts = qw(dangles temperature noLP pf_smooth compute_bpp);
     _check_opts_valid $opt_ref, @valid_opts;
 
     # Create model details object and set options
@@ -1254,9 +1312,16 @@ sub make_fold_compound {
 sub rna_mfe {
     my ($seq, $opt_ref) = @_;
 
-    # Create fold compound object and compute mfe.
-    my $fc  = make_fold_compound $seq, $opt_ref;
-    my ($mfe_struct, $mfe) = $fc->mfe;
+    my ($mfe_struct, $mfe);
+
+    if (defined $opt_ref) {     # set options using model detail object
+        # Create fold compound object and compute mfe.
+        my $fc  = make_fold_compound $seq, $opt_ref;
+        ($mfe_struct, $mfe) = $fc->mfe;
+    }
+    else {                      # use flat interface for default params
+        ($mfe_struct, $mfe) = RNA::fold($seq);
+    }
 
     return wantarray ? ($mfe_struct, $mfe) : $mfe;
 }
@@ -1411,13 +1476,100 @@ sub partition_energy {
 sub ensemble_energy {
     my ($seq, $opt_ref) = @_;
 
-    # Compute ensemble energy using an RNA fold compound object.
-    my $fc = make_fold_compound($seq, $opt_ref);
-    my $ensemble_energy = ($fc->pf)[1];
+    my $ensemble_energy;
+
+    if (defined $opt_ref) {
+        # Compute ensemble energy using an RNA fold compound object.
+        my $fc = make_fold_compound($seq, $opt_ref);
+        $ensemble_energy = ($fc->pf)[1];
+    }
+    else {
+        # Use simplified ("flat") interface if no model details are changed.
+        $ensemble_energy = (RNA::pf_fold($seq))[1]
+    }
 
     return $ensemble_energy;
 }
 
+# Compute the partial ensemble energy of an enumerated energy band above the
+# mfe structure.
+# Arguments:
+#   seq:        Sequence for which the ensemble energy should be computed.
+#   e_thresh:   Relative enumeration threshold (w.r.t. mfe) that is supposed
+#               to be enumerated.
+# Optional args passed in hash ref: cf. make_model_details()
+# The optional arguments default to their ViennaRNA default values.
+# NOTE: The subopt noLP (no lonely pair) option does NOT WORK THE SAME as the
+# implementations in this module. Specifically, some structures may still
+# contain lonely pairs.
+# Returns the (partial) ensemble free energy of the enumerated energy band.
+sub subopt_energy {
+    my ($seq, $e_thresh, $opt_ref) = @_;
+
+    # Disable unnecessary computations. Init opt ref if undef.
+    $opt_ref //= {};
+    $opt_ref->{compute_bpp} = 0;
+
+    # Create fold compound object with adjusted model details.
+    my $fc = make_fold_compound($seq, $opt_ref);
+
+    # Use mfe to scale partition function.
+    my $mfe = ($fc->mfe)[1];
+
+    # Arguments to subopt: range needs to be deka cal integer.
+    my $e_thresh_dekacal = int($e_thresh * 100);
+
+    # Define callback closure that sums up partition function and store data
+    # here.
+    my $part_func = 0.;
+    my $e_thresh_abs = $mfe + $e_thresh;
+    my $sum_up_subopt_nrg = sub {
+        # my ($struct, $nrg, $data) = @_;
+        my ($struct, $nrg) = @_;            # could also use data
+
+        # Last call has undefined struct (but not energy!), skip. Also skip if
+        # energy is above threshold. This may happen with dangles=1|3 since
+        # partition folding supports only dangles=0|2 and, with the first
+        # setting, enumerated structures are re-evaluated AFTER the
+        # backtracking by the subopt command.  Stand-alone RNAsubopt does this
+        # filtering step, too.
+        return unless defined $struct and $nrg <= $e_thresh_abs;
+
+        # $nrg = sprintf '%.2f', $nrg;        # round as RNAsubopt does
+        # say STDERR join ' :: ', @_;         # debug -- print all structures
+
+        # Scale energies with mfe (such that mfe has Boltzmann weight of 1) to
+        # avoid numerical issues. If this is not sufficient, use better approx
+        # of ensemble energy instead of mfe struct for scaling (cf. RNAlib
+        # manual).
+        $part_func += nrg2boltz $nrg - $mfe, $opt_ref->{temperature};
+    };
+
+    # Generate subopts and let callback function sum up partition function.
+    $fc->subopt_cb($e_thresh_dekacal, $sum_up_subopt_nrg);
+
+    # Unscale again.
+    my $subopt_nrg = $mfe + boltz2nrg $part_func, $opt_ref->{temperature};
+
+    return $subopt_nrg;
+}
+
+# Seed the random number generator (Mersenne Twister) with the passed value.
+# This is ONLY required to reproduce results, not before normal use.
+# When passing undef, the generator is auto-seeded with a random integer. The
+# used seed is returned. This is FAR LESS random than the random generators
+# internal auto-seeding, so really don't use this unless you need it.
+# Arugments:
+#   seed: The value to be passed to Math::Random::MT::Auto->srand. Can be a
+#       single integer, an array ref containing integers etc. Passing undef
+#       will auto-seed the generator with a single integer.
+# Returns the used seed.
+sub rand_seed {
+    my ($seed) = @_;
+    $seed //= irand();
+    srand($seed);
+    return get_seed();
+}
 
 # Generate a random RNA sequence consisting of G, C, A and U. Optionally, the
 # exact GC content of the sequence can be specified. If not specified, it is
@@ -2582,6 +2734,7 @@ sub genNeighbors_pairs {
 
 
 # Return 1 if passed bp is inside-lonely, i.e. has no inner neighbors.
+sub is_ins_lonely ( +$$ ) { isInsLonely(@_) }       # snake case wrapper
 sub isInsLonely ( +$$ )
 {
     my ($ptref, $i, $j) = @_;
@@ -2594,6 +2747,7 @@ sub isInsLonely ( +$$ )
 
 
 # Return 1 if passed bp is outside-lonely, i.e. has no surrounding neighbor.
+sub is_out_lonely ( +$$ ) { isOutLonely(@_) }       # snake case wrapper
 sub isOutLonely ( +$$ )
 {
     my ($ptref, $i, $j) = @_;
@@ -2605,8 +2759,16 @@ sub isOutLonely ( +$$ )
 }
 
 
+# Returns true iff position i is paired to another position.
+sub is_paired ($$) {
+    my ($pt, $i) = @_;
+    my $is_paired = $pt->[$i] >= 0;
+    return $is_paired;
+}
+
 # Check whether a certain base pair in a given pair table is lonely.
-sub isLonely( +$$ )
+sub is_lonely ( +$$ ) { isLonely(@_) }      # snake case wrapper
+sub isLonely ( +$$ )
 {
     my ($ptref, $i, $j) = @_;
     return isOutLonely( $ptref, $i, $j) && isInsLonely( $ptref, $i, $j);
@@ -2617,6 +2779,8 @@ sub isLonely( +$$ )
 # not contain any lonely base pairs (cf. isLonely). The structure may be given
 # as a dot-bracket string or a 0-based pairtable.
 # Returns true if structure is canonical, and false if it is not.
+sub is_lonely_struct ($) { isCanonical(@_) }
+sub is_canonical         { isCanonical(@_) }            # snake case wrapper
 sub isCanonical {
     my ($struct_or_pt) = @_;
     my $pt = reftype $struct_or_pt ? $struct_or_pt : str2pt $struct_or_pt;
@@ -2626,7 +2790,8 @@ sub isCanonical {
     return $is_canonical;
 }
 
-
+# TODO deprecated. There is no need for a sequence here ... use
+# is_lonely_struct() instead.
 sub isLonelyStruct( $$ )
 {
     my ($seq, $str) = @_;
@@ -2639,6 +2804,17 @@ sub isLonelyStruct( $$ )
     return 0;
 }
 
+# sub is_lonely_struct ($)
+# {
+#     my ($struct) = @_;
+#     my @pt = str2pt($struct);           # make pair table
+#     for( my $i=0; $i<@pt; $i++)
+#     {
+#         my $j = $pt[$i];
+#         return 1 if $j>=0 && $i<$j && isLonely( \@pt, $i, $j);
+#     }
+#     return 0;
+# }
 
 # Determine whether there is a bp enclosing (i,j) which will become
 # a lonely pair ("grow lonely") when deleting (i,j).
@@ -2785,6 +2961,29 @@ sub getValBpLeft
     return @bp;
 }
 
+# Makes an iterator for a given a pair table, which returns, at each call, the
+# next base pair (i,j) contained in the structure encoded by the pair table.
+# The base pairs are sorted by the first index.
+# Returns next bp (i, j) or false after the last base pair has been returned.
+sub bp_iter_factory {
+    my ($pt_ref) = @_;
+    my $i = -1;
+    my $seq_len = seq_len $pt_ref;
+
+    return sub {
+        while ($i < $seq_len-1) {           # run till last index after inc
+            $i += 1;                        # prepare for next call
+
+            # If pt[i] >= 0, i is paired to some j. Also exclude pair (j, i)
+            # where j > i.
+            my $j = $pt_ref->[$i];
+            next unless $i < $j;
+
+            return ($i, $j);
+        }
+        return;                             # no more base pairs
+    };
+}
 
 1;     # Required to return 1 from a Perl package...
 # EOF
