@@ -32,8 +32,10 @@ dependencies:
   - perl-test-warn
   - perl-pegex
   - perl-yaml
+  # - perl-yaml-pp
   - perl-tie-ixhash
   - perl-test-pod
   - perl-test-deep
+  # - perl-xxx
 prefix: /scr/bintang/felix/conda/envs/rnahelper
 
