@@ -1,4 +1,3 @@
-use 5.014;
 use strict;
 use warnings FATAL => 'all';
 use Module::Build;
@@ -16,8 +15,9 @@ my $builder = Module::Build->new(
         'Test::More' => '0',
     },
     requires => {
+        'perl'                   => 'v5.12',
         'Carp'                   => '1.38',
-        'warnings'               => '1.37',
+        'warnings'               => '1.34',
         'autodie'                => '2.29',
         'IPC::System::Simple'    => '1.25',
         'experimental'           => '0.016',
