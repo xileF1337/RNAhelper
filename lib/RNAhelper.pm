@@ -3009,7 +3009,7 @@ RNAhelper - Utility and misc functions for RNA structure bioinformatics.
 
 =head1 VERSION
 
-Version 0.01
+Version 1.4
 
 =head1 SYNOPSIS
 
