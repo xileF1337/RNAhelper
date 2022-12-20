@@ -1,5 +1,5 @@
 # RNAhelper.pm
-# Version 1.3 2019-08-09
+# Version 1.4 2022-12-20
 #
 # Provide utilities like pairtable generation, neighbor generation,
 # gradient walks etc. for RNA secondary structures.
@@ -10,7 +10,7 @@
 # Requires ViennaRNA Perl bindings
 #
 #
-# Copyright 2015 Felix Kuehnl, felix[at]bioinf.uni-leipzig.de
+# Copyright 2015--2022 Felix Kuehnl, felix[at]bioinf.uni-leipzig.de
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -34,7 +34,7 @@ use v5.12;
 use warnings;
 use autodie ':all';
 
-our $VERSION = '1.3';
+our $VERSION = '1.4';
 
 #use diagnostics;               # REALLY verbose error msges
 # Disables warning independent of perl version, requires module 'experimental'
@@ -72,7 +72,7 @@ use Devel::Assert 'off';        # use 'on/'off' to switch assertions on/off
 # Add all valid BPs. Add both xy and yx for symmetry.
 # use Readonly;
 # Readonly::Array my @VALID_BP => ('AU','UA','GC','CG','GU','UG');
-my @VALID_BP = ('AU','UA','GC','CG','GU','UG');
+my @VALID_BP = qw(AU UA GC CG GU UG);
 
 # Universal gas constant in kcal/mol as in ViennaRNA
 # my $GASCONST = 1.98717e-3;
@@ -92,8 +92,7 @@ BEGIN {
     our @EXPORT_OK = qw(
         printStrNrg
         printStrNrgLst
-        pt2str
-        pt2str_c
+        pt2str pt2str_c struct_string
         str2pt
         path2str
 
@@ -109,8 +108,6 @@ BEGIN {
 
         genNeighbors
         genNeighbors_pairs
-        rmLonelyPairs
-        rmLonelyUnpaired
         isLonely            is_lonely
         isLonelyStruct      is_lonely_struct
         isCanonical         is_canonical
@@ -790,15 +787,15 @@ END_OF_C_CODE
     use Inline C => $c_code, directory => $bin_store_dir;
 }
 
-# The universal gas constant in kcal/mol as defined in ViennaRNA
+# Returns the universal gas constant in kcal/mol as defined in ViennaRNA.
 sub get_gas_const {
     return $GASCONST;
 }
 
 
-# Convert pairtable and energy value to a formatted string
-# Pass structure and energy of structure
-# Excepts either a reference to a pairtable or a dot-bracket string as first arg
+# Convert pairtable and energy value to a formatted string. Pass structure and
+# energy of structure. Excepts either a reference to a pairtable or a
+# dot-bracket string as first arg.
 sub printStrNrg
 {
     my ($ptref, $nrg) = @_;
@@ -833,8 +830,9 @@ sub pt2str( + ) { struct_string(@_) }
 # }
 
 
-# Generate pairtable from dot bracket string
-# Indexing starts at 0, -1 means unpaired (unlike ViennaRNA!)
+# Generate pair table from dot-bracket string.
+# Indexing starts at 0, -1 means unpaired (unlike ViennaRNA!). Returns an
+# arrayref in scalar context, or a list of base pairs in list context.
 sub str2pt
 {
     my @str = split //, $_[0];
@@ -868,7 +866,7 @@ sub str2pt
 # Normalize sequence, i.e. convert it to upper case, and delete any
 # white-space characters.
 # Arguments:
-#   sequence: sequence to normalize.
+#   Sequence: sequence to normalize.
 # Returns the normalized sequence.
 sub normalize_seq ($) {
     my ($sequence) = @_;
@@ -878,7 +876,8 @@ sub normalize_seq ($) {
     return $sequence;
 }
 
-# Given a sequence string or a pair table ref, return the sequence length.
+# Given a sequence string, structure string, or a pair table ref, return the
+# sequence length.
 sub seq_len ($) {
     my ($seq_or_ptref) = @_;
     my $seq_len
@@ -887,7 +886,7 @@ sub seq_len ($) {
 }
 
 # Return true iff a valid sequence is given, that is one consisting solely of
-# A, U, T, G, and C, eith in upper or lower case. The empty sequence is not
+# A, U, T, G, and C, either in upper or lower case. The empty sequence is not
 # valid.
 sub is_valid_seq ($) {
     my ($sequence) = @_;
@@ -896,9 +895,10 @@ sub is_valid_seq ($) {
     return $is_valid_seq;
 }
 
-# Check base pair validity
-# Pass sequence string, pair table reference
-# Returns 0 / 1
+# Check base pair validity.
+# Pass sequence string and pair table reference. WARNING: This is slow and
+# should be improved, cf. code.
+# Returns 1 iff structure is valid.
 sub bp_valid ( $+ ) { bpValid(@_) }             # snake case wrapper
 sub bpValid ( $+ )
 {
@@ -911,6 +911,7 @@ sub bpValid ( $+ )
         my $j = $ptref->[$i];
         if ($i < $j)    # $i is paired and pair has not been checked yet
         {
+            # TODO a hash should be used for a constant-time comparison.
             unless( any {"$seq[$i]$seq[$j]" eq $_} @VALID_BP)
             {
                 say STDERR "ERROR: bpValid: Invalid base pair ",
@@ -923,7 +924,11 @@ sub bpValid ( $+ )
 }
 
 
-# Parallely make passed (SORTED!) lists unique w.r.t. first list.
+# Parallely make passed (SORTED!) lists of equal length unique w.r.t. first list.
+# More precisely, in the first list, every item is compared to the previous
+# one, and if both are equal, it is discarded. If position i is discarded in
+# the first list, it is also discarded in all other lists. The passed lists
+# are modified in place.
 sub parUniq
 {
     my $fst = shift;
@@ -943,19 +948,14 @@ sub parUniq
     }
 
     # Discard superflous trailing elements
-    #my $neg_diff = $j - @$fst;
-    #splice @$_, $neg_diff foreach ($fst, @_);
     splice @$_, $j foreach ($fst, @_);
-
-    # while( $j < @$fst) {
-    #     pop @$fst;
-    #     for my $lst (@_) { pop @$lst; }
-    # }
 }
 
 
-# Parallely sort passed lists (of equal length) w.r.t. values of first list.
-# In situ, pass by reference!
+# Parallely sort lists of equal length w.r.t. first list.
+# More precisely, the first list is sorted numerically, and to the other
+# lists, the same ordering is applied.
+# The lists are sorted in place.
 sub parSort
 {
     my @tmp;
@@ -982,10 +982,10 @@ sub parSort
 #     struct1 cmp struct2 < 0 (i.e. struct1 is lexicographically smaller)
 # and use the total order induced by this relation.
 # Arguments:
-#   pt1: pair table of first structure
-#   pt1: pair table of first structure
+#   pt1: Pair table of first structure.
+#   pt2: Pair table of second structure.
 # Returns a comparison value, i.e. a negative value if pt1 < pt2, a positive
-# value if pt1 > pt2, and zero if pt1 == pt2
+# value if pt1 > pt2, and zero if pt1 == pt2.
 sub struct_cmp (++) {
     my ($pt1, $pt2) = @_;
 
@@ -1016,8 +1016,8 @@ sub struct_cmp (++) {
 
 # Check whether two structures are equal. For details, cf. struct_cmp.
 # Arguments:
-#   pt1: (ref to) pair table of first structure
-#   pt2: (ref to) pair table of second structure
+#   pt1: (Ref to) pair table of first structure.
+#   pt2: (Ref to) pair table of second structure.
 # Returns true value if the structures are equal, and a false value otherwise.
 sub struct_eq (++) {
     return struct_cmp($_[0], $_[1]) == 0;
@@ -1027,8 +1027,8 @@ sub struct_eq (++) {
 # Check whether a structure is smaller than another one. For details, cf.
 # struct_cmp.
 # Arguments:
-#   pt1: (ref to) pair table of first structure
-#   pt2: (ref to) pair table of second structure
+#   pt1: (Ref to) pair table of first structure.
+#   pt2: (Ref to) pair table of second structure.
 # Returns true value if the first structure is smaller than the second one,
 # and a false value otherwise.
 sub struct_lt (++) {
@@ -1065,11 +1065,11 @@ sub bp_dist {
 # Extract a value from an option hash. If the option does not exist in the
 # passed hash, a default value is returned if it was passed, otherwise undef.
 # Arguments:
-#   opt_ref: reference to a hash containing options
-#   opt_name: string of the options name
-#   default: optional, default value if opt_name is not defined
-# returns the value of the option if it exists in the opt_ref hash, otherwise
-# a default value if it was passed, otherwise undef
+#   opt_ref:    Reference to a hash containing options.
+#   opt_name:   String of the options name.
+#   default:    Optional, default value if opt_name is not defined.
+# Returns the value of the option if it exists in the opt_ref hash, otherwise
+# a default value if it was passed, otherwise undef.
 sub get_opt {
     my ($opt_ref, $opt_name, $default) = @_;
     $default = defined $default ? $default : undef;
@@ -1078,16 +1078,18 @@ sub get_opt {
 
 
 # Compute the partition function of each basin, normalized with the mfe.
-# Arguments
-# sbmap_filehandle: handle to a file that lists on each line a  structure,
+# Arguments:
+# sbmap_filehandle: Handle to a file that lists on each line a  structure,
 #   its energy and its basin number; separated by whitespace. The structure
 #   is not used and can be replaced by a non-whitespace dummy.
-# temperature: folding temperature in deg Celsius, default: 37
-# mfe: optional, minimum free energy of sequence as a scalar. If undefined,
+# temperature: Folding temperature in deg Celsius. [37]
+# mfe: Optional, minimum free energy of sequence as a scalar. If undefined,
 #   it is determined by reading the first line from the sbmap file (assumes
 #   ordering by energy!). If a reference is provided, the mfe is determined
 #   from sbmap_filehandle and the referenced scalar is updated with the
-#   result.
+#   result. Otherwise, the given mfe is used.
+# Returns a list of scaled basin partition functions, where the index
+# corresponds to the basin number.
 sub get_basin_partition_funcs {
     my ($sbmap_filehandle, $opt) = @_;
     my $temperature = get_opt($opt, 'temperature', 37);
@@ -1126,7 +1128,7 @@ sub get_basin_partition_funcs {
 # adding constraints, etc. to the sequence.
 #
 # Arguments:
-#   seq_or_fc:  nucleotide sequence or ViennaRNA fold compound containing the
+#   seq_or_fc:  Nucleotide sequence or ViennaRNA fold compound containing the
 #               sequence.
 #
 # Returns reference to 2-dim array containing probabilities that index i pairs
@@ -1171,6 +1173,7 @@ sub celsius2kelvin ($) {
 # Optional arguments:
 #   temperature: temperature at which to compute the Boltzman weight, given in
 #       degree Celsius
+# Returns the Boltzmann weight / factor.
 sub nrg2boltz {
     my ($energy, $temperature) = @_;
     # Default temperature is 37 deg C
@@ -1192,6 +1195,7 @@ sub nrg2boltz {
 # Optional arguments:
 #   temperature: temperature at which to compute the Boltzman weight, given in
 #       degree Celsius
+# Returns the energy value.
 sub boltz2nrg {
     my ($boltzmann_weight, $temperature) = @_;
     # Default temperature is 37 deg C
@@ -1261,6 +1265,7 @@ sub _check_opts_valid {
 #              for coverage analyses, probabilities of structures etc.)
 #   compute_bpp: Compute base pair probabilities when doing partition function
 #                folding. [1] Disable improve performance.
+# Returns the model details object.
 sub make_model_details {
     my ($opt_ref) = @_;
 
@@ -1282,7 +1287,7 @@ sub make_model_details {
 # are given as a hash ref, create a model detail object and integrate settings
 # into the fold compound.
 # Arguments:
-#   seq: RNA sequence to create compound for
+#   seq: RNA sequence to create compound for.
 # Optional args, given as hash ref: cf. make_model_details()
 # Returns ViennaRNA fold compound of the given sequence and settings.
 sub make_fold_compound {
@@ -1303,12 +1308,13 @@ sub make_fold_compound {
 }
 
 
-# Compute the minimum free energy of a given sequence, considering optional
-# arguments like temperature and dangling end model. In list context, return
-# both the mfe structure and the mfe.
+# Compute the minimum free energy (mfe) of a given sequence, considering
+# optional arguments like temperature and dangling end model.
 # Arguments:
-#   seq: RNA sequence to compute mfe for
-#   opt_ref: hash ref containing options, see make_model_details().
+#   seq: RNA sequence to compute mfe for.
+#   opt_ref: Hash ref containing options, see make_model_details().
+# In scalar context, returns the mfe of the sequence. In list context, both
+# the mfe structure and the mfe itself are returned.
 sub rna_mfe {
     my ($seq, $opt_ref) = @_;
 
@@ -1330,8 +1336,9 @@ sub rna_mfe {
 # Compute the structure of minimum free energy for a given sequence,
 # considering optional arguments like temperature and dangling end model.
 # Arguments:
-#   seq: RNA sequence to compute mfe structure for
-#   opt_ref: hash ref containing options, see make_model_details().
+#   seq: RNA sequence to compute mfe structure for.
+#   opt_ref: Hash ref containing options, see make_model_details().
+# Returns the mfe structure as dot-bracket string.
 sub rna_mfe_struct {
     my ($seq, $opt_ref) = @_;
     my ($mfe_struct, $mfe) = rna_mfe($seq, $opt_ref);
@@ -1346,6 +1353,7 @@ sub rna_mfe_struct {
 #   seq: RNA sequence to compute energy for
 #   struct: secondary structure to evaluate
 #   opt_ref: hash ref containing options, see make_model_details().
+# Returns the energy of the given structure.
 sub rna_eval_structure {
     my ($seq, $struct, $opt_ref) = @_;
 
@@ -1356,8 +1364,8 @@ sub rna_eval_structure {
     return $energy;
 }
 
-# Computes the "partition energy" for a list of secondary structures, or, if
-# no structures are given, the energy of the full ensemble. This is the
+
+# Computes the "partition energy" for a list of free energies. This is the
 # energy related to the partition function by the Boltzmann transformation.
 # More precisely, for a set of structures X and its partition function Z given
 # by Z = sum Boltz( E(x) ) over x in X, where E(x) is the energy of x, its
@@ -1372,8 +1380,7 @@ sub rna_eval_structure {
 #       numerical issues. Default: mfe of sequence
 #   opt_ref: hash ref containing additional folding energy options:
 #       temperature: folding temperature for Boltzmann weight conversions
-# Returns the "partition energy" of the given list of structures, or of the
-#   full ensemble if structures where given.
+# Returns the partition energy of the given list of free energies.
 sub partition_energy_nrgiter {
     my ($seq, $energy_iter, $scale_energy, $opt_ref) = @_;
 
@@ -1406,7 +1413,20 @@ sub partition_energy_nrgiter {
 
 
 # Given a sequence and a struct iterator, computes the partition energy of the
-# set of structures returned by the iter.
+# set of structures returned by the iter. Wrapper for
+# partition_energy_structiter() that accepts a structure iter instead of an
+# energy iter.
+# Arguments:
+#   seq: Sequence for which to compute the structure energies.
+#   struct_iter: Iterator that returns the next structure for which to add up
+#       the energies.
+# Optional arguments:
+#   scale_energy: Energy offset which is substracted from all structures'
+#       energies before their Boltzmann weight is calculated. This avoids
+#       numerical issues. Default: mfe of sequence.
+#   opt_ref: hash ref containing additional folding energy options:
+#       temperature: folding temperature for Boltzmann weight conversions
+# Returns the scaled partition energy of the given structures.
 sub partition_energy_structiter {
     my ($seq, $struct_iter, $scale_energy, $opt_ref) = @_;
 
@@ -1429,8 +1449,8 @@ sub partition_energy_structiter {
 # Arguments:
 #   seq: Sequence for which to compute the structure energies.
 # Optional arguments:
-#   opt_ref: model detail options, cf. make_model_details().
-#   structures: list of secondary structure dot--bracket strings for which to
+#   opt_ref: Model detail options, cf. make_model_details().
+#   structures: List of secondary structure dot--bracket strings for which to
 #       compute the free energy. If empty, computes energy of entire ensemble.
 # Returns the total energy covered by the passed structures. If none were
 # passed, return the full ensemble energy.
@@ -1467,10 +1487,9 @@ sub partition_energy {
 # NOTE: Use parameter pf_smooth => 0 when using the ensemble energy together
 # with energies of single structures (e.g. when computing probabilities).
 # Smoothing would lead to errors!
-# probabilities
 # Arguments:
 #   seq:         sequence for which the ensemble energy should be computed
-# Optional args passed in hash ref: cf. make_model_details()
+# Optional args passed in hash ref: cf. make_model_details().
 # The optional arguments default to their ViennaRNA default values.
 # Returns the (full) ensemble free energy.
 sub ensemble_energy {
@@ -1497,7 +1516,7 @@ sub ensemble_energy {
 #   seq:        Sequence for which the ensemble energy should be computed.
 #   e_thresh:   Relative enumeration threshold (w.r.t. mfe) that is supposed
 #               to be enumerated.
-# Optional args passed in hash ref: cf. make_model_details()
+# Optional args passed in hash ref: cf. make_model_details().
 # The optional arguments default to their ViennaRNA default values.
 # NOTE: The subopt noLP (no lonely pair) option does NOT WORK THE SAME as the
 # implementations in this module. Specifically, some structures may still
@@ -1557,8 +1576,8 @@ sub subopt_energy {
 # Seed the random number generator (Mersenne Twister) with the passed value.
 # This is ONLY required to reproduce results, not before normal use.
 # When passing undef, the generator is auto-seeded with a random integer. The
-# used seed is returned. This is FAR LESS random than the random generators
-# internal auto-seeding, so really don't use this unless you need it.
+# used seed is returned. This is FAR LESS random than the random generator's
+# internal auto-seeding, so really don't use this unless you need to.
 # Arugments:
 #   seed: The value to be passed to Math::Random::MT::Auto->srand. Can be a
 #       single integer, an array ref containing integers etc. Passing undef
@@ -1615,7 +1634,7 @@ sub rand_seq {
 }
 
 
-# Print a list containing (pairtableref, nrg) pairs,
+# Print a list containing (pair table ref, energy) pairs,
 # each entry prefixed with an optionally passed prefix.
 sub printStrNrgLst
 {
@@ -1731,7 +1750,6 @@ sub grad_step ($+;$$) {
 }
 
 
-# NEW VERSION
 # Perform a gradient walk from current structure down to local minimum of the
 # current basin. Correctly handle degenerate landscapes, cf. grad_step
 # TODO implement stop structure hash that allow shortcutting when doing many
@@ -1781,17 +1799,17 @@ sub grad_walk($+;$$)
 # Flood cycle up to minh above starting structure's minimum and report all
 # surrounding local minima reachable from transient structures found
 # The following optional params are mainly used by waterfall:
-# qedref:   optional, pass ref to global hash of visited structures to re-use
+# qedref:   Optional, pass ref to global hash of visited structures to re-use
 #           this information across multiple calls.
-# minNmin:  optional, used with qedref. Only update qedref hash if at least
+# minNmin:  Optional, used with qedref. Only update qedref hash if at least
 #           <minNmin> minima were found (allows re-visiting structures after
 #           another minh has been passed.
-# maxFlood: optional used with qedref and minNmin. If minh >= maxFlood,
-# ofh:      update qedref in any case, even if not enough minima were found
-#           Output file handle, write structures and their energies found in
-#           this cycle to a file
-# noLP      use moveset avoiding lonely pairs by removing/adding lonely
-#           stacks of size 2 if a single pair indel would be lonely [1]
+# maxFlood: Optional, used with qedref and minNmin. If minh >= maxFlood,
+#           update qedref in any case, even if not enough minima were found
+# ofh:      Output file handle, write structures and their energies found in
+#           this cycle to a file.
+# noLP      Use moveset avoiding lonely pairs by removing/adding lonely
+#           stacks of size 2 if a single pair indel would be lonely. [1]
 sub floodCycle( $$$;$$$$$)
 {
     my $verb = 0;
@@ -1900,12 +1918,15 @@ sub floodCycle( $$$;$$$$$)
 # and keeps at most n structures at a time. The search space can be
 # restricted to canonical paths (noLP, no lonely pairs). Shift moves
 # are also supported.
-# seq: sequence string
-# start: start structure as dot-bracket string
-# target: target structure as dot-bracket string
-# n: keept at most n structures during search
-# noLP: do not allow lonely pairs, i.e. search canonical paths [default 0]
-# shift: allow shift moves  [default 0]
+# Arguments:
+#   seq: Sequence string.
+#   start: Start structure as dot-bracket string.
+#   target: Target structure as dot-bracket string.
+#   n: Keept at most n structures during search.
+#   noLP: Do not allow lonely pairs, i.e. search canonical paths [0]
+#   shift: Allow shift moves.  [0]
+# Returns a list of structure strings, including their energies, denoting the
+# found optimal path.
 sub bestDirectPath( $$$;$$$)
 {
     my ( $seq, $start, $target, $n, $noLP, $shift,) = @_;
@@ -1947,12 +1968,15 @@ sub bestDirectPath( $$$;$$$)
 # energy. The search is heuristic and keeps at most n structures at a
 # time. The search space can be restricted to canonical paths
 # (noLP, no lonely pairs). Shift moves are also supported.
-# seq: sequence string
-# start: start structure as dot-bracket string
-# target: target structure as dot-bracket string
-# n: keept at most n structures during search
-# noLP: do not allow lonely pairs, i.e. search canonical paths
-# shift: allow shift moves
+# Arguments:
+#   seq: Sequence string.
+#   start: Start structure as dot-bracket string.
+#   target: Target structure as dot-bracket string.
+#   n: Keept at most n structures during search.
+#   noLP: Do not allow lonely pairs, i.e. search canonical paths.
+#   shift: Allow shift moves.
+# Returns the saddle (i.e. highest) energy of the best (i.e. energetically
+# lowest) path found, rounded to two digits.
 sub bestDirectSaddle( $$$;$$$)
 {
     my ( $seq, $start, $target, $n, $noLP, $shift,) = @_;
@@ -1968,18 +1992,23 @@ sub bestDirectSaddle( $$$;$$$)
 
 # Compute direct paths with low saddles from structure pta to ptb (pass pairtables).
 # Keep at most n entries during search.
-#   seqstr: sequence as string
-#   pta: pairtable of start structure
-#   ptb: pairtable of target structure
-#   n: keep at most n structures during search
-#   opt: hash for optional options
+# Arguments:
+#   seqstr: Sequence as string.
+#   pta: Pair table of start structure.
+#   ptb: Pair table of target structure.
+#   n: Keep at most n structures during search.
+#   opt: Optional hash for options, see below.
 # Options:
-#   shift: allow shiftmoves
-#   noLP: only search canonical paths
-#   nreturn: return only the best <nreturn> paths
+#   shift: Allow shift moves. [1]
+#   noLP: Only search canonical paths. [1]
+#   verb: Be verbose.
+#   nreturn: Return only the best <nreturn> paths. [Inf]
+#   noDupes: No duplicates. [0]
+#   maxNrg: Maximum allowed energy in the path. [Inf]
+# Returns a list of the paths found.
 sub directPaths( $++$;+ )
 {
-    my ( $seqstr, $pta, $ptb, $n, $opt) = @_;
+    my ($seqstr, $pta, $ptb, $n, $opt) = @_;
     my $shift   = defined( $opt->{shift})   ? $opt->{shift}   : 1;
     my $noLP    = defined( $opt->{noLP})    ? $opt->{noLP}    : 1;
     my $verb    = defined( $opt->{verb})    ? $opt->{verb}    : 1;
@@ -1995,22 +2024,19 @@ sub directPaths( $++$;+ )
     my @paths =  (genInitialPath( $seqstr, $pta, $ptb)); # reference to path lists
     my $changed = 1;
 
-    while( $changed ) {
+    while ($changed) {
         $changed = 0;
         @paths = continuePaths( \@paths, $ptb, \$changed, $seqstr,
                                 { shift=>$shift, noLP=>$noLP, n=>$n,
                                   noDupes=>$noDupes, maxNrg=>$maxNrg
                                 }
                               );    # Add new paths
-        assert( [ sort { $a->{saddle} <=> $b->{saddle} } @paths ] ~~ @paths);
-        #say STDERR "Next:";
-        #say STDERR "saddle=$_->{saddle}" for @paths;
 
+        assert( [ sort { $a->{saddle} <=> $b->{saddle} } @paths ] ~~ @paths);
         assert @paths <= $n;
-        #@paths = @paths[ 0 .. $n-1 ] if @paths>$n; # Keep only best n paths
     }
 
-    if( $nreturn > 0) {
+    if ($nreturn > 0) {
         return @paths[0 .. min( $nreturn-1, $#paths)];
     }
     else {
@@ -2388,7 +2414,8 @@ sub path2str ( +)
     my $path = shift;
     # return if not $path;
 
-    # Reconstruct structures from last pairtable in reversed order, then reverse result again
+    # Reconstruct structures from last pairtable in reversed order, then
+    # reverse result again
     my ($str, $lastStr) = ( undef, $path->{last});      # current and last structure
     my @str = ($lastStr);                               # list of structures to return
 
@@ -2465,7 +2492,8 @@ sub nrg_of_move( $+$$ )
 }
 
 
-# Generate all neighbors and filter w.r.t. their energy difference t.
+# Generate all neighbors and filter w.r.t. their energy difference to the
+# current structure.
 # Arguments:
 #   seq: Sequence string.
 #   pair table ref: Pair table of structure.
@@ -2720,20 +2748,13 @@ sub genNeighbors
 # impractical as one cannot easily iterate over it non-destructively (i.e.
 # without while splice x, 0, 2). This sub wraps the list up into pairs
 # ([struct1, energy1], [struct2, energy2], ...)
-# Arguments: passed on to genNeighbors
+# Arguments: passed on to genNeighbors.
 sub genNeighbors_pairs {
     return pairs genNeighbors @_;
-
-    # my @neighbors = genNeighbors @_;
-    # my @neighbors_pairs;
-    # while (my ($structure, $energy) = splice @neighbors, 0, 2) {
-    #     push @neighbors_pairs, [$structure, $energy];
-    # }
-    # return @neighbors_pairs;
 }
 
 
-# Return 1 if passed bp is inside-lonely, i.e. has no inner neighbors.
+# Return 1 iff passed bp is inside-lonely, i.e. has no inner neighbors.
 sub is_ins_lonely ( +$$ ) { isInsLonely(@_) }       # snake case wrapper
 sub isInsLonely ( +$$ )
 {
@@ -2746,7 +2767,7 @@ sub isInsLonely ( +$$ )
 }
 
 
-# Return 1 if passed bp is outside-lonely, i.e. has no surrounding neighbor.
+# Return 1 iff passed bp is outside-lonely, i.e. has no surrounding neighbor.
 sub is_out_lonely ( +$$ ) { isOutLonely(@_) }       # snake case wrapper
 sub isOutLonely ( +$$ )
 {
@@ -2766,7 +2787,7 @@ sub is_paired ($$) {
     return $is_paired;
 }
 
-# Check whether a certain base pair in a given pair table is lonely.
+# Check whether base pair (i, j) in a given pair table is lonely.
 sub is_lonely ( +$$ ) { isLonely(@_) }      # snake case wrapper
 sub isLonely ( +$$ )
 {
@@ -2777,7 +2798,7 @@ sub isLonely ( +$$ )
 
 # Check whether a given RNA secondary structure is canonical, i.e. if it does
 # not contain any lonely base pairs (cf. isLonely). The structure may be given
-# as a dot-bracket string or a 0-based pairtable.
+# as a dot-bracket string or a 0-based pair table.
 # Returns true if structure is canonical, and false if it is not.
 sub is_lonely_struct ($) { isCanonical(@_) }
 sub is_canonical         { isCanonical(@_) }            # snake case wrapper
@@ -2804,17 +2825,6 @@ sub isLonelyStruct( $$ )
     return 0;
 }
 
-# sub is_lonely_struct ($)
-# {
-#     my ($struct) = @_;
-#     my @pt = str2pt($struct);           # make pair table
-#     for( my $i=0; $i<@pt; $i++)
-#     {
-#         my $j = $pt[$i];
-#         return 1 if $j>=0 && $i<$j && isLonely( \@pt, $i, $j);
-#     }
-#     return 0;
-# }
 
 # Determine whether there is a bp enclosing (i,j) which will become
 # a lonely pair ("grow lonely") when deleting (i,j).
@@ -3015,9 +3025,10 @@ Here is an example:
     say rna_mfe_struct 'GGGAUGCCC';
 
 
-=head1 EXPORT
+=head1 EXPORTS
 
-Functions need to be imported explicitly. Exported functions:
+Functions need to be imported explicitly. This is a list of all exported
+functions. A more detailed description is found in the next section.
 
 =over
 
@@ -3039,11 +3050,11 @@ Functions need to be imported explicitly. Exported functions:
 
 =item rand_seq
 
+=item rand_seed
+
 =back
 
 =over
-
-=item gradWalk
 
 =item grad_walk
 
@@ -3067,25 +3078,33 @@ Functions need to be imported explicitly. Exported functions:
 
 =item genNeighbors_pairs
 
-=item rmLonelyPairs
+=item isLonely, is_lonely
 
-=item rmLonelyUnpaired
+=item isLonelyStruct, is_lonely_struct
 
-=item isLonely
+=item isCanonical, is_canonical
 
-=item isLonelyStruct
+=item isInsLonely, is_ins_lonely
 
-=item isCanonical
-
-=item isInsLonely
-
-=item isOutLonely
+=item isOutLonely, is_out_lonely
 
 =back
 
 =over
 
-=item bpValid
+=item is_valid_seq
+
+=item normalize_seq
+
+=item seq_len
+
+=back
+
+=over
+
+=item bpValid, bp_valid
+
+=item is_paired
 
 =item struct_cmp
 
@@ -3094,6 +3113,10 @@ Functions need to be imported explicitly. Exported functions:
 =item struct_eq
 
 =item bp_dist
+
+=item bp_iter_factory
+
+=item nrg_of_move
 
 =back
 
@@ -3118,6 +3141,8 @@ Functions need to be imported explicitly. Exported functions:
 =item nrg2boltz
 
 =item ensemble_energy
+
+=item subopt_energy
 
 =item partition_energy
 
@@ -3158,14 +3183,857 @@ Functions need to be imported explicitly. Exported functions:
 
 =head1 SUBROUTINES
 
-=head2 function1
+Detailed documentation of exported subroutines.
 
-bla bla bla
+=head2 printStrNrg($ptref | $dbstring, $nrg)
 
-=head2 function2
+Convert pairtable and energy value to a formatted string. Pass structure and
+energy of structure. Excepts either a reference to a pairtable or a
+dot-bracket string as first arg.
 
-blub blub blub
+=head2 printStrNrgLst($pt_energy_list, $prefix = "")
 
+Print a list containing (pair table ref, energy) pairs,
+each entry prefixed with an optionally passed prefix.
+
+=head2 pt2str, pt2str_c, struct_string($pt_ref | @pair_table)
+
+Converts a pair table to a dot-bracket string.
+
+Arguments:
+
+=over
+
+=item pair_table: list or array ref to pairing table.
+
+=back
+
+Returns dot-bracket string of the structure.
+
+=head2 str2pt($dot_bracket_string)
+
+Generate pair table from dot-bracket string.
+Indexing starts at 0, -1 means unpaired (unlike ViennaRNA!). Returns an
+arrayref in scalar context, or a list of base pairs in list context.
+
+=head2 path2str($path)
+
+For the passed path, return a list of dot-bracket strings of visited structures
+from start to target.
+
+=head2 rand_seq($length, $gc_content = undef)
+
+Generate a random RNA sequence consisting of G, C, A and U. Optionally, the
+exact GC content of the sequence can be specified. If not specified, it is
+chosen randomly.
+
+Arguments:
+
+=over
+
+=item length: ~ of the sequence to be generated.
+
+=back
+
+Optional arguments:
+
+=over
+
+=item gc_content: Expected GC content of the generated sequence. 'Expected'
+    means that this value is used as a probability for sampling either a G
+    or a C, so the actual GC content of the generated sequences may vary
+
+=back
+
+Returns a random sequence with the requested GC content.
+
+=head2 rand_seed($seed = undef)
+
+Seed the random number generator (Mersenne Twister) with the passed value.
+This is ONLY required to reproduce results, not before normal use.
+When passing undef, the generator is auto-seeded with a random integer. The
+used seed is returned. This is FAR LESS random than the random generator's
+internal auto-seeding, so really don't use this unless you need to.
+
+Arugments:
+
+=over
+
+=item seed: The value to be passed to Math::Random::MT::Auto->srand. Can be a
+      single integer, an array ref containing integers etc. Passing undef
+      will auto-seed the generator with a single integer.
+
+=back
+
+Returns the used seed.
+
+=head2 grad_walk
+
+Perform a gradient walk from current structure down to local minimum of the
+current basin. Correctly handle degenerate landscapes, cf. grad_step
+
+Arguments:
+
+
+=over
+
+=item sequence: sequence string
+
+=item start_struct:  reference to pairtable of start structure
+
+=item start_energy:  energy of start structure (optional, is computed if not
+               defined)
+
+=item opt: option hash ref:
+
+=over
+
+=item walk_structs: array ref used to store structs (pt's) and energies of
+    structures encountered on walk between first and last struct if
+    they are required
+
+=item verb: flag, be verbose? [0]
+
+=item noLP: flag, use moveset avoiding lonely pairs? [0]
+
+=item shift: flag, use moveset using shift moves? [1]
+
+=back
+
+=back
+
+Returns the last structure (pairtable) of the walk and its energy.
+
+=head2 floodCycle($seqstr, $startptref, $minh, $qedref, $minNmin, $maxFlood, $ofh, $noLP)
+
+Cycle (basin) exploration, algorithm description in summary_riboswitches!
+
+Flood cycle up to minh above starting structure's minimum and report all
+surrounding local minima reachable from transient structures found.
+
+The following optional params are mainly used by waterfall:
+
+=over
+
+=item qedref:   optional, pass ref to global hash of visited structures to re-use
+                this information across multiple calls ("ref to queued hash@).
+
+=item minNmin:  Optional, used with qedref. Only update qedref hash if at least
+                <minNmin> minima were found (allows re-visiting structures after
+                another minh has been passed.
+
+=item maxFlood: Optional, used with qedref and minNmin. If minh >= maxFlood,
+                update qedref in any case, even if not enough minima were found.
+
+=item ofh:      Output file handle, write structures and their energies found in
+                this cycle to a file.
+
+=item noLP      Use moveset avoiding lonely pairs by removing/adding lonely
+                stacks of size 2 if a single pair indel would be lonely. [1]
+
+=back
+
+=head2 bestDirectPath
+
+Get the best (i.e. energetically lowest) direct path connecting
+the start structure with the target structure. The search is heuristic
+and keeps at most n structures at a time. The search space can be
+restricted to canonical paths (noLP, no lonely pairs). Shift moves
+are also supported.
+
+Arguments:
+
+=over
+
+=item seq: Sequence string.
+
+=item start: Start structure as dot-bracket string.
+
+=item target: Target structure as dot-bracket string.
+
+=item n: Keept at most n structures during search.
+
+=item noLP: Do not allow lonely pairs, i.e. search canonical paths [0]
+
+=item shift: Allow shift moves.  [0]
+
+=back
+
+Returns a list of structure strings, including their energies, denoting the
+found optimal path.
+
+=head2 bestDirectSaddle
+
+Get the best (i.e. energetically lowest) direct path connecting
+the start structure with the target structure and return its saddle
+energy. The search is heuristic and keeps at most n structures at a
+time. The search space can be restricted to canonical paths
+(noLP, no lonely pairs). Shift moves are also supported.
+
+Arguments:
+
+=over
+
+=item seq: Sequence string.
+
+=item start: Start structure as dot-bracket string.
+
+=item target: Target structure as dot-bracket string.
+
+=item n: Keept at most n structures during search.
+
+=item noLP: Do not allow lonely pairs, i.e. search canonical paths.
+
+=item shift: Allow shift moves.
+
+=back
+
+Returns the saddle (i.e. highest) energy of the best (i.e. energetically
+lowest) path found, rounded to two digits.
+
+=head2 directPaths
+
+Compute direct paths with low saddles from structure pta to ptb (pass pairtables).
+Keep at most n entries during search.
+
+Arguments:
+
+=over
+
+=item seqstr: Sequence as string.
+
+=item pta: Pair table of start structure.
+
+=item ptb: Pair table of target structure.
+
+=item n: Keep at most n structures during search.
+
+=item opt: Optional hash for options, see below.
+
+=back
+
+Options:
+
+=over
+
+=item shift: Allow shift moves. [1]
+
+=item noLP: Only search canonical paths. [1]
+
+=item verb: Be verbose.
+
+=item nreturn: Return only the best <nreturn> paths. [Inf]
+
+=item noDupes: No duplicates. [0]
+
+=item maxNrg: Maximum allowed energy in the path. [Inf]
+
+=back
+
+Returns a list of the paths found.
+
+=head2 genNeighbors
+
+Generate all neighbors and filter w.r.t. their energy difference to the
+current structure.
+
+Arguments:
+
+=over
+
+=item seq: Sequence string.
+
+=item pair table ref: Pair table of structure.
+
+=back
+
+Optional arguments:
+
+=over
+
+=item minh:  Maximal energy difference of neighbors. For the energy E of the
+             current structure, only return structures with energy at most
+             E + minh. [Infinity]
+
+=item noLP:  Skip neighbors containing lonely pairs? [1]
+
+=item shift: Perform shift moves? [1]
+
+=item nrg:   Energy of current structure. Re-computed unless provided.
+
+=item sort:  Sort the returned structure list by energy. [1]
+
+=item do_energies: Compute energy of neighbors? If not, all energy values are
+                   set to 0 and options minh, nrg and sort are disabled. [1]
+
+=back
+
+Returns (sorted?) list of pairs (\@pt,$nrg) (ref to pair table, energy)
+resembling the neighbor structures fulfilling the energy criterion.
+
+=head2 genNeighbors_pairs
+
+Wrapper for genNeighbors function. genNeighbors returns a list of form
+(struct1, energy1, struct2, energy2, ...) which is performant, but
+impractical as one cannot easily iterate over it non-destructively (i.e.
+without while splice x, 0, 2). This sub wraps the list up into pairs
+([struct1, energy1], [struct2, energy2], ...)
+
+Arguments: passed on to genNeighbors.
+
+=head2 isLonely, is_lonely($ptref, $i, $j)
+
+Check whether base pair (i, j) in a given pair table is lonely.
+
+=head2 isLonelyStruct($seq, $str)
+
+Deprecated. Use C<is_lonely_struct()> instead.
+
+=head2 isCanonical, is_canonical, is_lonely_struct($struct_or_pt)
+
+Check whether a given RNA secondary structure is canonical, i.e. if it does
+not contain any lonely base pairs (cf. isLonely). The structure may be given
+as a dot-bracket string or a 0-based pair table.
+
+Returns true if structure is canonical, and false if it is not.
+
+=head2 isInsLonely, is_ins_lonely($ptref, $i, $j)
+
+Return 1 iff passed bp is inside-lonely, i.e. has no inner neighbors.
+
+=head2 isOutLonely, is_out_lonely($ptref, $i, $j)
+
+Return 1 iff passed bp is outside-lonely, i.e. has no surrounding neighbor.
+
+=head2 is_valid_seq($sequence)
+
+Return true iff a valid sequence is given, that is one consisting solely of
+A, U, T, G, and C, either in upper or lower case. The empty sequence is not
+valid.
+
+=head2 normalize_seq($sequence)
+
+Normalize sequence, i.e. convert it to upper case, and delete any
+white-space characters.
+
+Arguments:
+
+=over
+
+=item sequence: Sequence to normalize.
+
+=back
+
+Returns the normalized sequence.
+
+=head2 seq_len($seq_or_ptref)
+
+Given a sequence string, structure string, or a pair table ref, return the
+sequence length.
+
+=head2 bpValid, bp_valid
+
+Check base pair validity. Valid base pairs are AU, UA, GC, CG, GU, and UG.
+Pass sequence string and pair table reference.
+
+WARNING: This is slow and should be improved, cf. code.
+
+Returns 1 iff structure is valid.
+
+=head2 is_paired($pair_table, $i)
+
+Returns true iff position i is paired to another position.
+
+=head2 struct_cmp($pt1, $pt2)
+
+Comparison function for two structure pair tables. Let struct1, struct2 be
+the two input structures. We define struct1 < struct2 iff
+sequence_length(struct1) < sequence_length(struct2) or
+sequence_length(struct1) == sequence_length(struct2) and
+    struct1 cmp struct2 < 0 (i.e. struct1 is lexicographically smaller)
+and use the total order induced by this relation.
+
+Arguments:
+
+=over
+
+=item pt1: Pair table of first structure.
+
+=item pt2: Pair table of second structure.
+
+=back
+
+Returns a comparison value, i.e. a negative value if pt1 < pt2, a positive
+value if pt1 > pt2, and zero if pt1 == pt2.
+
+=head2 struct_lt($pt1, $pt2)
+
+Check whether a structure is smaller than another one. For details, cf.
+struct_cmp.
+
+Arguments:
+
+=over
+
+=item pt1: (Ref to) pair table of first structure.
+
+=item pt2: (Ref to) pair table of second structure.
+
+=back
+
+Returns true value if the first structure is smaller than the second one,
+and a false value otherwise.
+
+=head2 struct_eq
+
+Check whether two structures are equal. For details, cf. struct_cmp.
+
+Arguments:
+
+=over
+
+=item pt1: (Ref to) pair table of first structure.
+
+=item pt2: (Ref to) pair table of second structure.
+
+=back
+
+Returns true value if the structures are equal, and a false value otherwise.
+
+=head2 bp_dist($struct_a, $struct_b)
+
+Compute the base pair distance of two structures given either as pair tables
+or dot-bracket strings.
+
+=head2 bp_iter_factory($pt_ref)
+
+Makes an iterator for a given a pair table, which returns, at each call, the
+next base pair (i,j) contained in the structure encoded by the pair table.
+The base pairs are sorted by the first index.
+Returns next bp (i, j) or false after the last base pair has been returned.
+
+=head2 nrg_of_move($seqstr, $ptref, $i, $j)
+
+Wrapper for RNA::energy_of_move from ViennaRNA to efficiently compute the
+energy difference of a single bp move.
+
+Arguments:
+
+=over
+
+=item seqstr: sequence string
+
+=item ptref:  reference to pairtable of struct
+
+=item i, j:   base pair that WILL BE BUT IS NOT YET added/removed to/from
+              pairtable
+
+=back
+
+Returns energy difference that would arise when adding / removing this bp.
+
+Notes:
+
+=over
+
+=item ViennaRNA's pairtables are 1-based, in this package they are 0-based.
+
+=item ViennaRNA tries to ADD (i,j) if i,j>0, and to REMOVE (i,j) if i,j<0.
+
+=item ViennaRNA requires i<j or the package could die
+
+=back
+
+=head2 rna_mfe($seq, $opt_ref)
+
+Compute the minimum free energy (mfe) of a given sequence, considering
+optional arguments like temperature and dangling end model.
+
+Arguments:
+
+=over
+
+=item seq: RNA sequence to compute mfe for.
+
+=item opt_ref: Hash ref containing options, see make_model_details().
+
+=back
+
+In scalar context, returns the mfe of the sequence. In list context, both
+the mfe structure and the MFE itself are returned.
+
+=head2 rna_mfe_struct($seq, $opt_ref)
+
+Compute the structure of minimum free energy for a given sequence,
+considering optional arguments like temperature and dangling end model.
+
+Arguments:
+
+=over
+
+=item seq: RNA sequence to compute mfe structure for.
+
+=item opt_ref: Hash ref containing options, see make_model_details().
+
+=back
+
+Returns the mfe structure as dot-bracket string.
+
+=head2 rna_eval_structure($seq, $struct, $opt_ref)
+
+Compute the free energy of an RNA secondary structure for a given sequence,
+considering optional arguments like temperature and dangling end model.
+
+Arguments:
+
+=over
+
+=item seq: RNA sequence to compute energy for
+
+=item struct: secondary structure to evaluate
+
+=item opt_ref: hash ref containing options, see make_model_details().
+
+=back
+
+Returns the energy of the given structure.
+
+=head2 make_fold_compound($seq, $opt_ref)
+
+Create a ViennaRNA fold compound object from a sequence. If model options
+are given as a hash ref, create a model detail object and integrate settings
+into the fold compound.
+
+Arguments:
+
+=over
+
+=item seq: RNA sequence to create compound for.
+
+=back
+
+Optional args, given as hash ref: cf. make_model_details().
+
+Returns ViennaRNA fold compound of the given sequence and settings.
+
+=head2 make_model_details($opt_ref)
+
+Create a model details object which can be passed to ViennaRNA's fold
+compound constructor to set model details for the energy computation.
+
+Arguments: hash ref containing:
+
+=over
+
+=item temperature: the RNA folding temperature in deg C [37]
+
+=item dangles: dangling end model, either 0 (= no dangles), 1 , 2
+      (full/overdangle), or 3 (+ helix stacking) [2]
+
+=item noLP: prohibit lonely base pairs (1 - only canonical structs, 0 - all) [0]
+            DOES NOT WORK AS EXPECTED for partition function calculations!
+            E.g. subopts will still contain some structures with lonely pairs,
+            and partition function will also not be exact.
+
+=item pf_smooth: smooth energy parameters for partition function calculations [1]
+                 Important to have differentiable energies when varying
+                 temperature. Disable to get exact partition functions when
+                 comparing with individual structures' Boltzmann weight (e.g.
+                 for coverage analyses, probabilities of structures etc.)
+
+=item compute_bpp: Compute base pair probabilities when doing partition function
+                   folding. [1] Disable improve performance.
+
+=back
+
+Returns the model details object.
+
+=head2 boltz2nrg($boltzmann_weight, $temperature)
+
+Compute the energy value E associated with the given Boltzmann weight or
+partition function Z, i.e.
+
+      E = - R * T * ln Z
+
+where T is the temperature and R is the universal gas constant.
+
+Arguments:
+
+=over
+
+=item boltzmann_weight: Boltzmann weight or partition function for which to
+          compute the associated energy value
+
+=back
+
+Optional arguments:
+
+=over
+
+=item temperature: temperature at which to compute the Boltzman weight, given in
+          degree Celsius
+
+=back
+
+Returns the energy value.
+
+=head2 nrg2boltz($energy, $temperature)
+
+Compute the Boltzmann weight Z of a given energy value E, i.e.
+
+      Z = exp( - E / (R * T) ),
+
+where T is the temperature and R is the universal gas constant.
+
+Arguments:
+
+=over
+
+=item energy: energy of which to compute the Boltzmann weight, given in kcal/mol
+
+=back
+
+Optional arguments:
+
+=over
+
+=item temperature: temperature at which to compute the Boltzman weight, given in
+          degree Celsius
+
+=back
+
+Returns the Boltzmann weight / factor.
+
+=head2 ensemble_energy($seq, $opt_ref)
+
+Compute ensemble / partition free energy. It does the same as
+partition_energy($seq), but accepts RNA model detail options to adjust
+temperature or dangling model.
+
+NOTE: Use parameter pf_smooth => 0 when using the ensemble energy together
+with energies of single structures (e.g. when computing probabilities).
+Smoothing would lead to errors!
+
+Arguments:
+
+=over
+
+=item seq:         sequence for which the ensemble energy should be computed
+
+=back
+
+Optional args passed in hash ref: cf. make_model_details().
+The optional arguments default to their ViennaRNA default values.
+
+Returns the (full) ensemble free energy.
+
+=head2 subopt_energy
+
+Compute the partial ensemble energy of an enumerated energy band above the
+mfe structure.
+
+Arguments:
+
+=over
+
+=item seq:        Sequence for which the ensemble energy should be computed.
+
+=item e_thresh:   Relative enumeration threshold (w.r.t. mfe) that is supposed
+                  to be enumerated.
+
+=back
+
+Optional args passed in hash ref: cf. make_model_details().
+The optional arguments default to their ViennaRNA default values.
+
+NOTE: The subopt noLP (no lonely pair) option does NOT WORK THE SAME as the
+implementations in this module. Specifically, some structures may still
+contain lonely pairs.
+
+Returns the (partial) ensemble free energy of the enumerated energy band.
+
+=head2 partition_energy($seq, $opt_ref)
+
+Wrapper for the partition_energy_iter function that can be called using a
+a sequence and an array of structures.
+
+Arguments:
+
+=over
+
+=item seq: Sequence for which to compute the structure energies.
+
+=back
+
+Optional arguments:
+
+=over
+
+=item opt_ref: Model detail options, cf. make_model_details().
+
+=item structures: List of secondary structure dot--bracket strings for which to
+          compute the free energy. If empty, computes energy of entire ensemble.
+
+=back
+
+Returns the total energy covered by the passed structures. If none were
+passed, return the full ensemble energy.
+
+=head2 partition_energy_structiter($seq, $struct_iter, $scale_energy, $opt_ref)
+
+Given a sequence and a struct iterator, computes the partition energy of the
+set of structures returned by the iter. Wrapper for
+C<partition_energy_structiter()> that accepts a structure iter instead of an
+energy iter.
+
+Arguments:
+
+=over
+
+=item seq: Sequence for which to compute the structure energies.
+      struct_iter: Iterator that returns the next structure for which to add up
+          the energies.
+
+=back
+
+Optional arguments:
+
+=over
+
+=item scale_energy: Energy offset which is substracted from all structures'
+          energies before their Boltzmann weight is calculated. This avoids
+          numerical issues. Default: mfe of sequence.
+
+=item opt_ref: hash ref containing additional folding energy options:
+          temperature: folding temperature for Boltzmann weight conversions
+
+=back
+
+Returns the scaled partition energy of the given structures.
+
+=head2 partition_energy_nrgiter($seq, $energy_iter, $scale_energy, $opt_ref)
+
+Computes the "partition energy" for a list of free energies. This is the
+energy related to the partition function by the Boltzmann transformation.
+More precisely, for a set of structures X and its partition function Z given
+by Z = sum Boltz( E(x) ) over x in X, where E(x) is the energy of x, its
+partition energy E_p and is computed such that Z = Boltz( E_p ).
+
+Arguments:
+
+=over
+
+=item seq: Sequence for the given list of structures.
+      energy_iter: iterator that returns, with each call, the next secondary
+          structure's energy.
+
+=back
+
+Optional arguments:
+
+=over
+
+=item scale_energy: Energy offset which is substracted from all structures'
+          energies before their Boltzmann weight is calculated. This avoids
+          numerical issues. Default: mfe of sequence
+
+=item opt_ref: hash ref containing additional folding energy options:
+          temperature: folding temperature for Boltzmann weight conversions
+
+=back
+
+Returns the partition energy of the given list of free energies.
+
+=head2 get_gas_const
+
+Returns the universal gas constant in kcal/mol as defined in ViennaRNA.
+
+=head2 celsius2kelvin($deg_celsius)
+
+Convert a temperature value from degree Celsius to Kelvin.
+
+=head2 get_basin_partition_funcs($sbmap_filehandle, $opt)
+
+Compute the partition function of each basin, normalized with the mfe.
+
+Arguments:
+
+=over
+
+=item sbmap_filehandle: Handle to a file that lists on each line a  structure,
+        its energy and its basin number; separated by whitespace. The structure
+        is not used and can be replaced by a non-whitespace dummy.
+
+=item temperature: Folding temperature in deg Celsius. [37]
+
+=item mfe: Optional, minimum free energy of sequence as a scalar. If undefined,
+        it is determined by reading the first line from the sbmap file (assumes
+        ordering by energy!). If a reference is provided, the mfe is determined
+        from sbmap_filehandle and the referenced scalar is updated with the
+        result. Otherwise, the given mfe is used.
+
+=back
+
+Returns a list of scaled basin partition functions, where the index
+corresponds to the basin number.
+
+=head2 base_pair_prob
+
+Given an RNA sequence of length n, compute an n x n probability matrix bpp
+storing the probabilities that nucleotide i is paired with nucleotide j in
+entry bpp[i,j]. This matrix is symmetric.
+
+Instead of a sequence, a ViennaRNA fold compound may be passed to allow
+adding constraints, etc. to the sequence.
+
+Arguments:
+
+=over
+
+=item seq_or_fc: Nucleotide sequence or ViennaRNA fold compound containing the
+    sequence.
+
+=back
+
+Returns reference to 2-dim array containing probabilities that index i pairs
+with index j.
+
+=head2 get_opt
+
+Extract a value from an option hash. If the option does not exist in the
+passed hash, a default value is returned if it was passed, otherwise undef.
+
+Arguments:
+
+=over
+
+=item opt_ref:    Reference to a hash containing options.
+
+=item opt_name:   String of the options name.
+
+=item default:    Optional, default value if opt_name is not defined.
+
+=back
+
+Returns the value of the option if it exists in the opt_ref hash, otherwise
+a default value if it was passed, otherwise undef.
+
+=head2 parUniq($list_1_ref, ...)
+
+Parallely make passed (SORTED!) lists of equal length unique w.r.t. first list.
+More precisely, in the first list, every item is compared to the previous
+one, and if both are equal, it is discarded. If position i is discarded in
+the first list, it is also discarded in all other lists.
+
+The passed lists are modified in place.
+
+=head2 parSort($list_1_ref, ...)
+
+Parallely sort lists of equal length w.r.t. first list.
+More precisely, the first list is sorted numerically, and to the other
+lists, the same ordering is applied.
+
+The lists are sorted in place.
 
 =head1 AUTHOR
 
@@ -3215,7 +4083,7 @@ L<https://metacpan.org/release/RNAhelper>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2019 Felix Kuehnl.
+Copyright 2015--2022 Felix Kuehnl.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
