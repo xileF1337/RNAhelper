@@ -22,17 +22,8 @@ perldoc command.
 
 You can also look for information at:
 
-    RT, CPAN's request tracker (report bugs here)
-        https://rt.cpan.org/NoAuth/Bugs.html?Dist=RNAhelper
-
-    AnnoCPAN, Annotated CPAN documentation
-        http://annocpan.org/dist/RNAhelper
-
-    CPAN Ratings
-        https://cpanratings.perl.org/d/RNAhelper
-
-    Search CPAN
-        https://metacpan.org/release/RNAhelper
+    GitHub, the official code repository of this module:
+        https://github.com/xileF1337/RNAhelper
 
 
 LICENSE AND COPYRIGHT
